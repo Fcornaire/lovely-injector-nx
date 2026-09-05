@@ -1,0 +1,27 @@
+[package]
+name = "lovely-injector-nx"
+version = "0.1.0"
+edition = "2021"
+description = "Nintendo Switch (skyline) loader for lovely-injector: runs lovely mods inside Balatro !"
+license = "GPL-3.0"
+
+[workspace]
+members = ["api"]
+
+[package.metadata.skyline]
+titleid = "0100CD801CE5E000" # Balatro
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+skyline = "0.6.0"
+lovely-core = { git = "https://github.com/Fcornaire/lovely-injector", branch = "feature/build-without-dynamic-loading", default-features = false }
+lovely-nx-api = { path = "api" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true

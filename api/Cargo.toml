@@ -1,0 +1,9 @@
+[package]
+name = "lovely-nx-api"
+version = "0.1.0"
+edition = "2021"
+description = "C ABI of the lovely-injector-nx skyline plugin, for plugins that want the game's Lua state"
+license = "GPL-3.0"
+
+[dependencies]
+skyline = "0.6.0"

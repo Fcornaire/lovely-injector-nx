@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  TITLE_ID: 0100CD801CE5E000
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cargo-skyline
+        run: cargo install cargo-skyline
+
+      - name: Install skyline toolchain
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          NIGHTLY="nightly-$(gh api 'repos/skyline-rs/rust-src/commits?sha=skyline&author=bors&per_page=1' --jq '.[0].commit.author.date[:10]')"
+          rustup toolchain install "$NIGHTLY" --profile minimal --no-self-update
+          TOOLCHAIN="$HOME/.skyline-toolchain"
+          cp -a "$(rustup run "$NIGHTLY" rustc --print sysroot)" "$TOOLCHAIN"
+          SRC="$TOOLCHAIN/lib/rustlib/src/rust"
+          rm -rf "$SRC"
+          git clone -q --depth 1 --filter=blob:none --sparse --branch skyline https://github.com/skyline-rs/rust-src "$SRC"
+          git -C "$SRC" sparse-checkout set library
+          git -C "$SRC" submodule update -q --init --depth 1 library/backtrace
+          rustup toolchain link skyline-v3 "$TOOLCHAIN"
+          echo "std source $(git -C "$SRC" rev-parse --short HEAD) on $NIGHTLY"
+
+      - name: Build plugin
+        run: cargo skyline build --release
+
+      - name: Package
+        run: |
+          set -e
+          VERSION="${GITHUB_REF_NAME}"
+          PKG="lovely-injector-nx-${VERSION}"
+          PLUGINS="$PKG/atmosphere/contents/${TITLE_ID}/romfs/skyline/plugins"
+          EXEFS="$PKG/atmosphere/contents/${TITLE_ID}/exefs"
+          mkdir -p "$PLUGINS" "$EXEFS" "$PKG/Balatro/Mods"
+          cp target/aarch64-skyline-switch/release/liblovely_injector_nx.nro "$PLUGINS/"
+          cp exefs/main.npdm exefs/subsdk9 "$EXEFS/"
+          cp -r mods/switch-perf "$PKG/Balatro/Mods/"
+          cp README.md "$PKG/"
+          zip -r "$PKG.zip" "$PKG"
+          echo "ZIP=$PKG.zip" >> "$GITHUB_ENV"
+          find "$PKG" -type f | sort
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lovely-injector-nx
+          path: ${{ env.ZIP }}
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: ${{ env.ZIP }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          generateReleaseNotes: true
+          allowUpdates: true
+          omitBodyDuringUpdate: true
+          omitNameDuringUpdate: true

@@ -1,0 +1,119 @@
+# Switch-only lovely patches for Balatro
+# They trim per-frame Lua work that is free on PC but expensive
+# on the Switch build
+#
+
+# High priority so these apply *after* Steamodded's own patches
+[manifest]
+version = "1.0.0"
+priority = 100
+
+## Moveable:align_to_major(): restore the "nothing changed" early return
+[[patches]]
+[patches.regex]
+target = 'engine/moveable.lua'
+pattern = '''(?<indent>[\t ]*)if not self\.alignment\.type_list then return end'''
+position = 'at'
+line_prepend = '$indent'
+payload = '''if self.alignment.type_list == nil then return end
+do -- [switch-perf] early return when nothing about this alignment changed
+    local _a, _T = self.alignment, self.T
+    local _po, _o = _a.prev_offset, _a.offset
+    if _po and _o and _po.x == _o.x and _po.y == _o.y and _a.prev_type == _a.type
+        and _a.prev_w == _T.w and _a.prev_h == _T.h then return end
+    _a.prev_w, _a.prev_h = _T.w, _T.h
+end'''
+
+## Game:update(): drop the "LONG DT" print
+# A print per slow frame is not free on the console
+[[patches]]
+[patches.pattern]
+target = 'game.lua'
+pattern = '''if self.real_dt > 0.05 then print('LONG DT @ '..math.floor(G.TIMERS.REAL)..': '..self.real_dt) end'''
+position = 'at'
+payload = '''-- [switch-perf] "LONG DT" print removed'''
+match_indent = true
+
+## Moveable:move(): fast path for a Major at rest
+# Skips the six move_* helpers when nothing can change
+[[patches]]
+[patches.pattern]
+target = 'engine/moveable.lua'
+pattern = '''self:align_to_major()'''
+position = 'after'
+match_indent = true
+payload = '''
+if self.STATIONARY and self.role.role_type == 'Major' and not self.NEW_ALIGNMENT and not self.juice
+    and not self.config.refresh_movement and not self.alignment.lr_clamp then
+    local T, VT, vel = self.T, self.VT, self.velocity
+    if T.x == VT.x and T.y == VT.y and T.r == VT.r and T.scale == VT.scale and T.w == VT.w and T.h == VT.h
+        and vel.x == 0 and vel.y == 0 and vel.r == 0 and vel.scale == 0
+        and not self.pinch.x and not self.pinch.y
+        and not (self.zoom and (self.states.drag.is or self.states.hover.is)) then
+        self.CALCING = nil
+        self.NEW_ALIGNMENT = false
+        return
+    end
+end'''
+
+## Moveable:move_scale(): settle exactly
+[[patches]]
+[patches.pattern]
+target = 'engine/moveable.lua'
+pattern = '''self.VT.scale = self.VT.scale + self.velocity.scale'''
+position = 'after'
+match_indent = true
+payload = '''
+if math.abs(self.VT.scale - des_scale) < 0.0005 and math.abs(self.velocity.scale) < 0.0005 then
+    self.VT.scale = des_scale
+    self.velocity.scale = 0
+end'''
+
+## Card:draw(): keep the vanilla function around
+# Steamodded replaces Card.draw at load time and keeps no reference to the original
+[[patches]]
+[patches.pattern]
+target = 'card.lua'
+pattern = '''function Card:release(dragged)'''
+position = 'before'
+match_indent = true
+payload = '''
+Card.nx_vanilla_draw = Card.draw
+'''
+
+## Game:start_run(): draw cards the vanilla way
+# Cheaper than Steamodded's draw step loop,obviosly loses Steamodded only card visuals
+[[patches]]
+[patches.pattern]
+target = 'game.lua'
+pattern = '''function Game:start_run(args)'''
+position = 'after'
+match_indent = true
+payload = '''
+    if SMODS and SMODS.DrawStep and SMODS.DrawSteps and not Card.nx_draw_fast then
+        local info = debug.getinfo(Card.draw, 'S')
+        if info and info.source and info.source:find('card_draw.lua', 1, true) then
+            Card.nx_draw_fast = true
+            if Card.nx_vanilla_draw then
+                Card.draw = Card.nx_vanilla_draw
+            else
+                local steps, steps_n = nil, -1
+                function Card:draw(layer)
+                    layer = layer or 'both'
+                    self.hover_tilt = 1
+                    if not self.states.visible then return end
+                    local buffer = SMODS.DrawStep.obj_buffer
+                    if steps_n ~= #buffer then
+                        steps, steps_n = {}, #buffer
+                        for i = 1, steps_n do steps[i] = SMODS.DrawSteps[buffer[i]] end
+                    end
+                    for i = 1, steps_n do
+                        local step = steps[i]
+                        if step.layers[layer] and (next(step.conditions) == nil or step:check_conditions(self, layer)) then
+                            step.func(self, layer)
+                        end
+                    end
+                end
+            end
+        end
+    end'''
